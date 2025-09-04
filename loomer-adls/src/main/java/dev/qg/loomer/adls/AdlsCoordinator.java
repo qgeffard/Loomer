@@ -3,11 +3,13 @@ package dev.qg.loomer.adls;
 import com.azure.core.util.BinaryData;
 import com.azure.storage.file.datalake.DataLakeFileClient;
 import com.azure.storage.file.datalake.DataLakeFileSystemClient;
-import com.azure.storage.file.datalake.models.DataLakeLeaseClient;
 import com.azure.storage.file.datalake.models.DataLakeStorageException;
+import com.azure.storage.file.datalake.specialized.DataLakeLeaseClient;
+import com.azure.storage.file.datalake.specialized.DataLakeLeaseClientBuilder;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.qg.loomer.core.StepDef;
 import java.io.IOException;
+import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 
@@ -28,9 +30,10 @@ public class AdlsCoordinator {
     String runningPath = readyPath.replaceFirst("ready/", "running/" + workerId + "/");
     DataLakeFileClient running = fs.getFileClient(runningPath);
     try {
-      ready.rename(runningPath);
-      DataLakeLeaseClient leaseClient = running.getLeaseClient();
-      String leaseId = leaseClient.acquireLease(30).getValue().getLeaseId();
+      ready.rename(null, runningPath);
+      DataLakeLeaseClient leaseClient =
+          new DataLakeLeaseClientBuilder().fileClient(running).buildClient();
+      String leaseId = leaseClient.acquireLease(30);
       return new ClaimedStep(running, leaseId);
     } catch (DataLakeStorageException e) {
       if (e.getStatusCode() == 409 || e.getStatusCode() == 412) {
@@ -45,7 +48,10 @@ public class AdlsCoordinator {
    */
   public String decrementDependency(String depPath, StepDef child) throws IOException {
     DataLakeFileClient dep = fs.getFileClient(depPath);
-    int val = Integer.parseInt(new String(dep.readAllBytes(), StandardCharsets.UTF_8).trim());
+    int val;
+    try (InputStream stream = dep.openInputStream().getInputStream()) {
+      val = Integer.parseInt(new String(stream.readAllBytes(), StandardCharsets.UTF_8).trim());
+    }
     val--;
     if (val <= 0) {
       dep.delete();

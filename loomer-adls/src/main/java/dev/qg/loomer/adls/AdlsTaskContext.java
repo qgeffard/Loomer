@@ -7,6 +7,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.qg.loomer.core.CancelledException;
 import dev.qg.loomer.core.TaskContext;
 import java.io.IOException;
+import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 
 /** Task context backed by Azure Data Lake Storage. */
@@ -37,7 +38,9 @@ public class AdlsTaskContext implements TaskContext {
     if (!in.exists()) {
       return null;
     }
-    return mapper.readValue(new String(in.readAllBytes(), StandardCharsets.UTF_8), type);
+    try (InputStream stream = in.openInputStream().getInputStream()) {
+      return mapper.readValue(new String(stream.readAllBytes(), StandardCharsets.UTF_8), type);
+    }
   }
 
   @Override

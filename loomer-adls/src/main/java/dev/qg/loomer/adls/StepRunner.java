@@ -3,6 +3,10 @@ package dev.qg.loomer.adls;
 import com.azure.core.util.BinaryData;
 import com.azure.storage.file.datalake.DataLakeFileClient;
 import com.azure.storage.file.datalake.DataLakeFileSystemClient;
+import com.azure.storage.file.datalake.models.DataLakeRequestConditions;
+import com.azure.storage.file.datalake.specialized.DataLakeLeaseClient;
+import com.azure.storage.file.datalake.specialized.DataLakeLeaseClientBuilder;
+import com.azure.core.util.Context;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.qg.loomer.core.RetryPolicy;
 import dev.qg.loomer.core.StepDef;
@@ -12,6 +16,7 @@ import dev.qg.loomer.core.TaskRegistry;
 import dev.qg.loomer.core.TaskResult;
 import dev.qg.loomer.core.TaskResult.Status;
 import java.io.IOException;
+import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.concurrent.ExecutionException;
@@ -35,8 +40,10 @@ public class StepRunner {
 
   public TaskResult execute(AdlsCoordinator.ClaimedStep claim) throws Exception {
     DataLakeFileClient running = claim.file();
-    StepDef def =
-        mapper.readValue(new String(running.readAllBytes(), StandardCharsets.UTF_8), StepDef.class);
+    StepDef def;
+    try (InputStream stream = running.openInputStream().getInputStream()) {
+      def = mapper.readValue(new String(stream.readAllBytes(), StandardCharsets.UTF_8), StepDef.class);
+    }
 
     String runId = def.runId();
     String stepId = def.stepId();
@@ -49,7 +56,11 @@ public class StepRunner {
     try {
       res = f.get(def.timeoutMs(), TimeUnit.MILLISECONDS);
     } catch (ExecutionException e) {
-      throw e.getCause();
+      Throwable cause = e.getCause();
+      if (cause instanceof Exception ex) {
+        throw ex;
+      }
+      throw new RuntimeException(cause);
     } catch (Exception e) {
       f.cancel(true);
       res = TaskResult.retry("timeout");
@@ -71,8 +82,11 @@ public class StepRunner {
       throws IOException {
     String dest =
         "runs/" + runId + "/done/" + status.name().toLowerCase() + "/" + runningFile.getFileName();
-    runningFile.rename(dest, null, leaseId);
-    runningFile.getLeaseClient().releaseLease();
+    DataLakeRequestConditions conds = new DataLakeRequestConditions().setLeaseId(leaseId);
+    runningFile.renameWithResponse(dest, leaseId, conds, null, null, Context.NONE);
+    DataLakeLeaseClient leaseClient =
+        new DataLakeLeaseClientBuilder().fileClient(runningFile).leaseId(leaseId).buildClient();
+    leaseClient.releaseLease();
     new EventsAppender(fs, runId, mapper).append(stepId, status.name().toLowerCase());
   }
 
@@ -104,6 +118,8 @@ public class StepRunner {
     fs.getDirectoryClient("runs/" + def.runId() + "/ready/" + bucket).createIfNotExists();
     fs.getFileClient(readyPath)
         .upload(BinaryData.fromString(mapper.writeValueAsString(updated)), true);
-    runningFile.delete();
+    DataLakeRequestConditions conds = new DataLakeRequestConditions().setLeaseId(leaseId);
+    runningFile.deleteWithResponse(conds, null, Context.NONE);
+    new DataLakeLeaseClientBuilder().fileClient(runningFile).leaseId(leaseId).buildClient().releaseLease();
   }
 }

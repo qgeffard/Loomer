@@ -79,7 +79,7 @@ public class StepRunner {
     String dest =
         "runs/" + runId + "/done/" + status.name().toLowerCase() + "/" + runningFile.getFileName();
     DataLakeRequestConditions conds = new DataLakeRequestConditions().setLeaseId(leaseId);
-    runningFile.renameWithResponse(null, dest, conds, null, null, null, Context.NONE);
+    runningFile.renameWithResponse(dest, leaseId, conds, null, null, Context.NONE);
     DataLakeLeaseClient leaseClient =
         new DataLakeLeaseClientBuilder().fileClient(runningFile).leaseId(leaseId).buildClient();
     leaseClient.releaseLease();
